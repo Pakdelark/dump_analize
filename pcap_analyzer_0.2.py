@@ -190,7 +190,7 @@ def pretty_print(tp, top_n=10):
     print(f"Top {top_n} IP addresses:")
     total = tp['total_ip_endpoints']
     for i, (ip, cnt) in enumerate(tp['ip_counts'].most_common(top_n), 1):
-        print(f"{i:2d}. {ip:40s} total:{cnt:7d} "
+        print(f"{i:2d}. {ip:20s} total:{cnt:7d} "
               f"src:{tp['ip_src_counts'][ip]:7d} "
               f"dst:{tp['ip_dst_counts'][ip]:7d} "
               f"{human_perc(cnt, total)}")
