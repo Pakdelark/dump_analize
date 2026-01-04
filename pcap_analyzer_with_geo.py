@@ -1,26 +1,59 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-pcap_analyzer.py
-Корректный и быстрый анализ pcap:
+Accurate and fast pcap analysis:
 - IPv4 / IPv6
 - TCP / UDP / ICMP / ICMPv6
-- IP src/dst
-- Порты с учётом протокола
+- Top IP src/dst with GEO
+- port taking into account the protocol
 - TCP flags (по комбинациям)
+- init/resp and port
 """
 
+import os
 import sys
 import argparse
 from collections import Counter
 from scapy.all import PcapReader, TCP, UDP, IP, IPv6, ARP
 
+# attempting to import the geoip2 library
+try:
+    import geoip2.database
+except ImportError:
+    geoip2 = None
 
+# launch geoIP if the GeoLite2-Country.mmdb file is in the directory
+def init_geoip():   
+    db_path = os.path.join(os.getcwd(), "GeoLite2-Country.mmdb")
+
+    if not geoip2:
+        return None
+
+    if not os.path.isfile(db_path):
+        return None
+
+    try:
+        return geoip2.database.Reader(db_path)
+    except Exception:
+        return None
+# if the country is not found, returns dashes
+def geo_country(reader, ip):    
+    if not reader:
+        return "--"
+
+    try:
+        r = reader.country(ip)
+        return r.country.iso_code or "--"
+    except Exception:
+        return "--"
+
+# initialize persent format
 def human_perc(part, whole):
     return f"{(part / whole * 100):6.2f}%" if whole else "0.00%"
 
-
-def analyze_pcap(path, max_packets=None):
+# packet and content counter
+def analyze_pcap(path, max_packets=None):   
     # Counters
     l3_counts = Counter()
     l4_counts = Counter()
@@ -155,7 +188,8 @@ def analyze_pcap(path, max_packets=None):
                 else:
                     l3_counts['OTHER'] += 1
 
-    except FileNotFoundError:
+    # input error handling
+    except FileNotFoundError:   
         print(f"File not found: {path}", file=sys.stderr)
         sys.exit(2)
     except Exception as e:
@@ -179,8 +213,8 @@ def analyze_pcap(path, max_packets=None):
         'ip_flows': ip_flows,
         'ip_port_flows': ip_port_flows,
     }
-
-def split_initiators_responders(src_counter, dst_counter, top_n=10):
+# defining the connection initiator
+def split_initiators_responders(src_counter, dst_counter, top_n=10):  
     roles = []
     for key in set(src_counter) | set(dst_counter):
         src = src_counter.get(key, 0)
@@ -202,7 +236,9 @@ def split_initiators_responders(src_counter, dst_counter, top_n=10):
 
     return initiators, responders
 
+# global output 
 def pretty_print(tp, top_n=10):
+
     print("=" * 60)
     print(f"Total packets processed: {tp['total_packets']}")
     print("-" * 60)
@@ -219,14 +255,18 @@ def pretty_print(tp, top_n=10):
         print(f"  {k:12s}: {v:8d} {human_perc(v, total)}")
 
     print("-" * 60)
+    geo = init_geoip()  # attempt to initialize the GEO function
+    
+    # top ip adresses
     print(f"Top {top_n} IP addresses:")
     total = tp['total_ip_endpoints']
     for i, (ip, cnt) in enumerate(tp['ip_counts'].most_common(top_n), 1):
-        print(f"{i:2d}. {ip:20s} total:{cnt:7d} "
+        country = geo_country(geo, ip)  # GEO
+        print(f"{i:2d}. {ip:20s} [{country:2s}] "
               f"src:{tp['ip_src_counts'][ip]:7d} "
               f"dst:{tp['ip_dst_counts'][ip]:7d} "
               f"{human_perc(cnt, total)}")
-
+    # top ports
     print("-" * 60)
     print(f"Top {top_n} ports:")
     total = tp['total_port_endpoints']
@@ -236,6 +276,7 @@ def pretty_print(tp, top_n=10):
               f"dst:{tp['port_dst_counts'][(proto, port)]:7d} "
               f"{human_perc(cnt, total)}")
 
+    # TCP - flags
     print("-" * 60)
     print("TCP flag combinations:")
     total = tp['total_tcp_packets']
@@ -244,7 +285,7 @@ def pretty_print(tp, top_n=10):
 
     print("=" * 60)
 
-    # new code
+    # initiators 
 
     print("TOP IP INITIATORS (src ≫ dst) WITH TARGETS")
 
@@ -253,8 +294,9 @@ def pretty_print(tp, top_n=10):
     )
 
     for i, (src_ip, src_cnt, dst_cnt, delta) in enumerate(initiators, 1):
-        # src_cnt / dst_cnt — это числа, не ip.src/ip.dst
-        print(f"\n{i:2d}. {src_ip}  src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
+
+        country = geo_country(geo, src_ip)
+        print(f"\n{i:2d}. {src_ip} [{country}] src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
 
         # Куда этот IP слал пакеты
         targets = Counter(
