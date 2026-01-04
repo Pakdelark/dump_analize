@@ -33,6 +33,9 @@ def analyze_pcap(path, max_packets=None):
     port_src_counts = Counter()
     port_dst_counts = Counter()
 
+    ip_flows = Counter()      # (src_ip, dst_ip)
+    ip_port_flows = Counter() # (src_ip, proto, dst_port)
+
     tcp_flag_combo = Counter()
 
     total_packets = 0
@@ -56,6 +59,7 @@ def analyze_pcap(path, max_packets=None):
                     ip_counts[ip.dst] += 1
                     ip_src_counts[ip.src] += 1
                     ip_dst_counts[ip.dst] += 1
+                    ip_flows[(ip.src, ip.dst)] += 1
                     total_ip_endpoints += 2
 
                     proto = ip.proto
@@ -72,6 +76,7 @@ def analyze_pcap(path, max_packets=None):
                         port_counts[key_d] += 1
                         port_src_counts[key_s] += 1
                         port_dst_counts[key_d] += 1
+                        ip_port_flows[(ip.src, 'TCP', tcp.dport)] += 1
                         total_port_endpoints += 2
 
                         tcp_flag_combo[str(tcp.sprintf("%TCP.flags%"))] += 1
@@ -87,6 +92,7 @@ def analyze_pcap(path, max_packets=None):
                         port_counts[key_d] += 1
                         port_src_counts[key_s] += 1
                         port_dst_counts[key_d] += 1
+                        ip_port_flows[(ip.src, 'UDP', udp.dport)] += 1
                         total_port_endpoints += 2
 
                     elif proto == 1:
@@ -103,6 +109,7 @@ def analyze_pcap(path, max_packets=None):
                     ip_counts[ip6.dst] += 1
                     ip_src_counts[ip6.src] += 1
                     ip_dst_counts[ip6.dst] += 1
+                    ip_flows[(ip6.src, ip6.dst)] += 1
                     total_ip_endpoints += 2
 
                     if TCP in pkt:
@@ -117,6 +124,7 @@ def analyze_pcap(path, max_packets=None):
                         port_counts[key_d] += 1
                         port_src_counts[key_s] += 1
                         port_dst_counts[key_d] += 1
+                        ip_port_flows[(ip6.src, 'TCP', tcp.dport)] += 1
                         total_port_endpoints += 2
 
                         tcp_flag_combo[str(tcp.sprintf("%TCP.flags%"))] += 1
@@ -132,6 +140,7 @@ def analyze_pcap(path, max_packets=None):
                         port_counts[key_d] += 1
                         port_src_counts[key_s] += 1
                         port_dst_counts[key_d] += 1
+                        ip_port_flows[(ip6.src, 'UDP', udp.dport)] += 1
                         total_port_endpoints += 2
 
                     elif ip6.nh == 58:
@@ -167,8 +176,31 @@ def analyze_pcap(path, max_packets=None):
         'total_ip_endpoints': total_ip_endpoints,
         'total_port_endpoints': total_port_endpoints,
         'total_tcp_packets': total_tcp_packets,
+        'ip_flows': ip_flows,
+        'ip_port_flows': ip_port_flows,
     }
 
+def split_initiators_responders(src_counter, dst_counter, top_n=10):
+    roles = []
+    for key in set(src_counter) | set(dst_counter):
+        src = src_counter.get(key, 0)
+        dst = dst_counter.get(key, 0)
+        delta = src - dst
+        roles.append((key, src, dst, delta))
+
+    initiators = sorted(
+        [r for r in roles if r[3] > 0],
+        key=lambda x: x[3],
+        reverse=True
+    )[:top_n]
+
+    responders = sorted(
+        [r for r in roles if r[3] < 0],
+        key=lambda x: abs(x[3]),
+        reverse=True
+    )[:top_n]
+
+    return initiators, responders
 
 def pretty_print(tp, top_n=10):
     print("=" * 60)
@@ -209,6 +241,69 @@ def pretty_print(tp, top_n=10):
     total = tp['total_tcp_packets']
     for flags, cnt in tp['tcp_flag_combo'].most_common():
         print(f"  {flags:8s}: {cnt:7d} {human_perc(cnt, total)}")
+
+    print("=" * 60)
+
+    # new code
+
+    print("TOP IP INITIATORS (src ≫ dst) WITH TARGETS")
+
+    initiators, responders = split_initiators_responders(
+        tp['ip_src_counts'], tp['ip_dst_counts'], top_n
+    )
+
+    for i, (src_ip, src_cnt, dst_cnt, delta) in enumerate(initiators, 1):
+        # src_cnt / dst_cnt — это числа, не ip.src/ip.dst
+        print(f"\n{i:2d}. {src_ip}  src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
+
+        # Куда этот IP слал пакеты
+        targets = Counter(
+            {dst: c for (s, dst), c in tp['ip_flows'].items() if s == src_ip}
+        )
+
+        for dst_ip, cnt in targets.most_common(3):
+            print(f"      → {dst_ip:<40} packets:{cnt}")
+
+        # На какие порты этот IP слал трафик
+        ports = Counter(
+            {(proto, port): c
+             for (s, proto, port), c in tp['ip_port_flows'].items()
+             if s == src_ip}
+        )
+
+        for (proto, port), cnt in ports.most_common(5):
+            print(f"      → {proto}:{port:<6} packets:{cnt}")
+
+    # =========================
+    # IP responders
+    # =========================
+    print("\n" + "=" * 60)
+    print("TOP IP RESPONDERS (dst ≫ src)")
+
+    for i, (ip, src_cnt, dst_cnt, delta) in enumerate(responders, 1):
+        print(f"{i:2d}. {ip:<40} src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
+
+    # =========================
+    # Port initiators (clients)
+    # =========================
+    print("\n" + "=" * 60)
+    print("TOP PORT INITIATORS (clients)")
+
+    p_init, p_resp = split_initiators_responders(
+        tp['port_src_counts'], tp['port_dst_counts'], top_n
+    )
+
+    for i, ((proto, port), src_cnt, dst_cnt, delta) in enumerate(p_init, 1):
+        print(f"{i:2d}. {proto}:{port:<6} src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
+
+    # =========================
+    # Port responders (servers)
+    # =========================
+    print("\n" + "=" * 60)
+    print("TOP PORT RESPONDERS (servers)")
+
+    for i, ((proto, port), src_cnt, dst_cnt, delta) in enumerate(p_resp, 1):
+        print(f"{i:2d}. {proto}:{port:<6} src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
 
     print("=" * 60)
 
