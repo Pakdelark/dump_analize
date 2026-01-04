@@ -274,37 +274,6 @@ def pretty_print(tp, top_n=10):
         for (proto, port), cnt in ports.most_common(5):
             print(f"      → {proto}:{port:<6} packets:{cnt}")
 
-    # =========================
-    # IP responders
-    # =========================
-    print("\n" + "=" * 60)
-    print("TOP IP RESPONDERS (dst ≫ src)")
-
-    for i, (ip, src_cnt, dst_cnt, delta) in enumerate(responders, 1):
-        print(f"{i:2d}. {ip:<40} src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
-
-    # =========================
-    # Port initiators (clients)
-    # =========================
-    print("\n" + "=" * 60)
-    print("TOP PORT INITIATORS (clients)")
-
-    p_init, p_resp = split_initiators_responders(
-        tp['port_src_counts'], tp['port_dst_counts'], top_n
-    )
-
-    for i, ((proto, port), src_cnt, dst_cnt, delta) in enumerate(p_init, 1):
-        print(f"{i:2d}. {proto}:{port:<6} src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
-
-    # =========================
-    # Port responders (servers)
-    # =========================
-    print("\n" + "=" * 60)
-    print("TOP PORT RESPONDERS (servers)")
-
-    for i, ((proto, port), src_cnt, dst_cnt, delta) in enumerate(p_resp, 1):
-        print(f"{i:2d}. {proto}:{port:<6} src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
-
     print("=" * 60)
 
 
