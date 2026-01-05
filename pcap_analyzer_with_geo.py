@@ -7,7 +7,7 @@ Accurate and fast pcap analysis:
 - TCP / UDP / ICMP / ICMPv6
 - Top IP src/dst with GEO
 - port taking into account the protocol
-- TCP flags (по комбинациям)
+- TCP flags
 - init/resp and port
 """
 
@@ -40,13 +40,13 @@ def init_geoip():
 # if the country is not found, returns dashes
 def geo_country(reader, ip):    
     if not reader:
-        return "--"
+        return "-------"
 
     try:
         r = reader.country(ip)
-        return r.country.iso_code or "--"
+        return r.country.name or "-------"   # or use r.country.iso_code [US]
     except Exception:
-        return "--"
+        return "-------"
 
 # initialize persent format
 def human_perc(part, whole):
@@ -262,7 +262,7 @@ def pretty_print(tp, top_n=10):
     total = tp['total_ip_endpoints']
     for i, (ip, cnt) in enumerate(tp['ip_counts'].most_common(top_n), 1):
         country = geo_country(geo, ip)  # GEO
-        print(f"{i:2d}. {ip:20s} [{country:2s}] "
+        print(f"{i:2d}. {ip:20s} {country:15s} "
               f"src:{tp['ip_src_counts'][ip]:7d} "
               f"dst:{tp['ip_dst_counts'][ip]:7d} "
               f"{human_perc(cnt, total)}")
@@ -296,7 +296,7 @@ def pretty_print(tp, top_n=10):
     for i, (src_ip, src_cnt, dst_cnt, delta) in enumerate(initiators, 1):
 
         country = geo_country(geo, src_ip)
-        print(f"\n{i:2d}. {src_ip} [{country}] src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
+        print(f"\n{i:2d}. {src_ip} {country} src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
 
         # Куда этот IP слал пакеты
         targets = Counter(

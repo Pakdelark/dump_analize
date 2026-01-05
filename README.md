@@ -2,4 +2,9 @@ This is instument for fast analize traffic dump.
 Required additional python libraries
  - scapy
  - geoip2 
-launch options: python3 pcap_analyzer_0.2.py <dump_file.pcap>
+launch options: python3 pcap_analyzer_*py <dump_file.pcap>
+
+GEO-IP
+    In order for GEO-IP to work, it necessary download database, in the same folder where the script is located.
+    -free versian download from the officual website MaxMind or other sources.
+    In the current version, launch scripts from the directory the script is located.
