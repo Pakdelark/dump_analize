@@ -11,11 +11,11 @@ Accurate and fast pcap analysis:
 - init/resp and port
 """
 
-import os
 import sys
 import argparse
 from collections import Counter
 from scapy.all import PcapReader, TCP, UDP, IP, IPv6, ARP
+from pathlib import Path
 
 # attempting to import the geoip2 library
 try:
@@ -25,12 +25,13 @@ except ImportError:
 
 # launch geoIP if the GeoLite2-Country.mmdb file is in the directory
 def init_geoip():   
-    db_path = os.path.join(os.getcwd(), "GeoLite2-Country.mmdb")
+    base_dir = Path(__file__).resolve().parent
+    db_path = base_dir / "GeoLite2-Country.mmdb"
 
     if not geoip2:
         return None
 
-    if not os.path.isfile(db_path):
+    if not db_path.is_file():
         return None
 
     try:
