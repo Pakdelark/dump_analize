@@ -19,31 +19,41 @@ In order for GEO-IP to work, it necessary download database, in the same folder 
 ### Format result
 
 Total packets processed:
----
+
 L3 protocol distribution:
+
 	* IPv4	:
 	* ARP	:
 	* IPv6	:
 	...
----
+
 L4 protocol distribution:
+
 	* TCP
 	* UDP
 	...
----
+
+
 Top 10 IP addresses:
+
 ...
----
+
+
 Top 10 ports:
+
 ...
----
+
 TCP flag combinations:
+
 	* PA	:
 	* A 	:
 	...
----
+
+
 TOP IP INITIATORS (src ≫ dst) WITH TARGETS
+
 ...
----
+
+
 
 
