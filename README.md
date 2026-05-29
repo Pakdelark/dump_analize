@@ -49,6 +49,10 @@ TCP flag combinations:
 	* A 	:
 	...
 
+Top 10 requested web resources (SNI / HTTP Host)
+
+...
+
 
 TOP IP INITIATORS (src ≫ dst) WITH TARGETS
 
