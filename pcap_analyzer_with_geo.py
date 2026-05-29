@@ -12,6 +12,7 @@ Accurate and fast pcap analysis:
 """
 
 import sys
+import re
 import argparse
 from collections import Counter
 from scapy.all import PcapReader, TCP, UDP, IP, IPv6, ARP
@@ -53,6 +54,70 @@ def geo_country(reader, ip):
 def human_perc(part, whole):
     return f"{(part / whole * 100):6.2f}%" if whole else "0.00%"
 
+# fast extraction of SNI (TLS Client Hello) or HTTP Host
+def extract_sni_or_host(pkt):
+    if TCP not in pkt:
+        return None
+    
+    try:
+        payload = bytes(pkt[TCP].payload)
+    except Exception:
+        return None
+
+    if not payload:
+        return None
+
+    # 1. HTTP Request detection (GET, POST, HEAD, PUT, DELETE, OPTIONS, CONNECT)
+    if any(payload.startswith(m) for m in [b"GET ", b"POST ", b"HEAD ", b"PUT ", b"DELETE ", b"OPTIONS ", b"CONNECT "]):
+        try:
+            text = payload.decode('utf-8', errors='ignore')
+            for line in text.split('\r\n'):
+                if line.lower().startswith('host:'):
+                    return line.split(':', 1)[1].strip()
+        except Exception:
+            pass
+
+    # 2. TLS Client Hello detection (0x16 = Handshake, 0x01 = Client Hello)
+    if len(payload) > 43 and payload[0] == 0x16 and payload[5] == 0x01:
+        try:
+            idx = 43  # Position of Session ID Length
+            if idx >= len(payload): return None
+            sess_id_len = payload[idx]
+            idx += 1 + sess_id_len
+            
+            if idx + 2 > len(payload): return None
+            cipher_len = int.from_bytes(payload[idx:idx+2], byteorder='big')
+            idx += 2 + cipher_len
+            
+            if idx + 1 > len(payload): return None
+            comp_len = payload[idx]
+            idx += 1 + comp_len
+            
+            if idx + 2 > len(payload): return None
+            ext_len = int.from_bytes(payload[idx:idx+2], byteorder='big')
+            idx += 2
+            
+            end_idx = idx + ext_len
+            if end_idx > len(payload): end_idx = len(payload)
+            
+            while idx + 4 <= end_idx:
+                ext_type = int.from_bytes(payload[idx:idx+2], byteorder='big')
+                ext_data_len = int.from_bytes(payload[idx+2:idx+4], byteorder='big')
+                idx += 4
+                
+                if ext_type == 0:  # Server Name Indication (SNI)
+                    if idx + 2 <= end_idx:
+                        _ = int.from_bytes(payload[idx:idx+2], byteorder='big') # list length
+                        if idx + 5 <= end_idx and payload[idx+2] == 0:  # Hostname type
+                            name_len = int.from_bytes(payload[idx+3:idx+5], byteorder='big')
+                            if idx + 5 + name_len <= end_idx:
+                                return payload[idx+5:idx+5+name_len].decode('utf-8', errors='ignore')
+                idx += ext_data_len
+        except Exception:
+            pass
+
+    return None
+
 # packet and content counter
 def analyze_pcap(path, max_packets=None):   
     # Counters
@@ -71,6 +136,7 @@ def analyze_pcap(path, max_packets=None):
     ip_port_flows = Counter() # (src_ip, proto, dst_port)
 
     tcp_flag_combo = Counter()
+    sni_counts = Counter()    # SNI web-resource counter
 
     total_packets = 0
     total_ip_endpoints = 0
@@ -114,6 +180,11 @@ def analyze_pcap(path, max_packets=None):
                         total_port_endpoints += 2
 
                         tcp_flag_combo[str(tcp.sprintf("%TCP.flags%"))] += 1
+
+                        # Extracting Web Resources (SNI / HTTP Host)
+                        web_res = extract_sni_or_host(pkt)
+                        if web_res:
+                            sni_counts[web_res] += 1
 
                     elif UDP in pkt:
                         l4_counts['UDP'] += 1
@@ -208,6 +279,7 @@ def analyze_pcap(path, max_packets=None):
         'port_src_counts': port_src_counts,
         'port_dst_counts': port_dst_counts,
         'tcp_flag_combo': tcp_flag_combo,
+        'sni_counts': sni_counts,
         'total_ip_endpoints': total_ip_endpoints,
         'total_port_endpoints': total_port_endpoints,
         'total_tcp_packets': total_tcp_packets,
@@ -284,6 +356,16 @@ def pretty_print(tp, top_n=10):
     for flags, cnt in tp['tcp_flag_combo'].most_common():
         print(f"  {flags:8s}: {cnt:7d} {human_perc(cnt, total)}")
 
+    # Top 10 Web Resources (SNI / HTTP Host)
+    print("-" * 60)
+    print(f"Top {top_n} requested web resources (SNI / HTTP Host):")
+    total_sni = sum(tp['sni_counts'].values())
+    if total_sni > 0:
+        for i, (resource, cnt) in enumerate(tp['sni_counts'].most_common(top_n), 1):
+            print(f"{i:2d}. {resource:<40} total:{cnt:7d} {human_perc(cnt, total_sni)}")
+    else:
+        print("  No SNI or HTTP Host entries identified.")
+
     print("=" * 60)
 
     # initiators 
@@ -307,7 +389,7 @@ def pretty_print(tp, top_n=10):
         for dst_ip, cnt in targets.most_common(3):
             print(f"      → {dst_ip:<40} packets:{cnt}")
 
-        # На какие порты этот IP слал трафик
+        # Which ports this IP sent traffic to
         ports = Counter(
             {(proto, port): c
              for (s, proto, port), c in tp['ip_port_flows'].items()
