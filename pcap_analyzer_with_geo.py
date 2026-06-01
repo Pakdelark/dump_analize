@@ -5,16 +5,19 @@
 Accurate and fast pcap analysis:
 - IPv4 / IPv6
 - TCP / UDP / ICMP / ICMPv6
+- TLS
 - Top IP src/dst with GEO
 - port taking into account the protocol
 - TCP flags
+- VPN
+- SNI
 - init/resp and port
 """
 
 import sys
 import re
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict 
 from scapy.all import PcapReader, TCP, UDP, IP, IPv6, ARP
 from pathlib import Path
 
@@ -74,47 +77,6 @@ def detect_tls_version(pkt):
                 if b'\x00\x2b' in payload:
                     return "TLS 1.3"
                 return "TLS 1.2"
-    return None
-
-# Heuristic discovery WireGuard, OpenVPN и IPsec over UDP
-def detect_vpn_protocols(pkt):
-
-    if not pkt.haslayer(UDP):
-        return None
-        
-    payload = bytes(pkt[UDP].payload)
-    if not payload:
-        return None
-        
-    sport = pkt[UDP].sport
-    dport = pkt[UDP].dport
-
-    # 1. Detection WireGuard use signature title
-    if len(payload) >= 4 and payload[1:4] == b'\x00\x00\x00':
-        msg_type = payload[0]
-        wg_types = {
-            1: "WireGuard Handshake Initiation",
-            2: "WireGuard Handshake Response",
-            3: "WireGuard Cookie Reply",
-            4: "WireGuard Transport Data"
-        }
-        if msg_type in wg_types:
-            return wg_types[msg_type]
-
-    # 2. Detection IPsec NAT-Traversal (standart port 4500)
-    if dport == 4500 or sport == 4500:
-        if len(payload) >= 4:
-            if payload[0:4] == b'\x00\x00\x00\x00':
-                return "IPsec (IKEv2 NAT-T)"
-            else:
-                return "IPsec (ESP NAT-T)"
-
-    # 3. Детекция OpenVPN UDP (проверка смещения Opcode и портов)
-    if len(payload) > 1:
-        opcode = payload[0] >> 3
-        if 1 <= opcode <= 10 and (dport == 1194 or sport == 1194):
-            return f"OpenVPN UDP (Opcode: {opcode})"
-            
     return None
 
 # fast extraction of SNI (TLS Client Hello) or HTTP Host
@@ -181,6 +143,52 @@ def extract_sni_or_host(pkt):
 
     return None
 
+# Heuristic discovery WireGuard, OpenVPN и IPsec
+def detect_vpn_and_ports(pkt):
+    # Return cortage: (Protocol_name, port or (None, None).
+    if pkt.haslayer(UDP):
+        payload = bytes(pkt[UDP].payload)
+        sport = pkt[UDP].sport
+        dport = pkt[UDP].dport
+        
+        # 1. WireGuard (Signature: 1-4 byte type + 3 byte zero)
+        if len(payload) >= 4 and payload[1:4] == b'\x00\x00\x00':
+            msg_type = payload[0]
+            if msg_type in [1, 2, 3, 4]:
+                # VPN-port (default 51820)
+                active_port = dport if dport != 51820 and sport == 51820 else dport
+                return "WireGuard", f"UDP:{active_port}"
+        
+        # 2. IPsec NAT-Traversal (default 4500)
+        if dport == 4500 or sport == 4500:
+            if len(payload) >= 4:
+                p_name = "IPsec (IKEv2 NAT-T)" if payload[0:4] == b'\x00\x00\x00\x00' else "IPsec (ESP NAT-T)"
+                return p_name, f"UDP:{dport if dport == 4500 else sport}"
+        
+        # 3. OpenVPN UDP (Heuristic by Opcode + classic port)
+        if len(payload) > 1:
+            opcode = payload[0] >> 3
+            if 1 <= opcode <= 10 and (dport == 1194 or sport == 1194):
+                return "OpenVPN (UDP)", f"UDP:{dport if dport == 1194 else sport}"
+
+    elif pkt.haslayer(TCP):
+        payload = bytes(pkt[TCP].payload)
+        sport = pkt[TCP].sport
+        dport = pkt[TCP].dport
+        
+        # 4. OpenVPN TCP (default port = 1194 and header length)
+        if len(payload) >= 2:
+            if dport == 1194 or sport == 1194:
+                return "OpenVPN (TCP)", f"TCP:{dport if dport == 1194 else sport}"
+            # Additional marker for OpenVPN on 'hidden' ports like 443
+            elif dport == 443 or sport == 443:
+                # We check whether the segment length matches the first two bytes of the TCP payload
+                op_len = int.from_bytes(payload[0:2], byteorder='big')
+                if op_len == len(payload) - 2 and (payload[2] >> 3) in [1, 2, 7, 8]:
+                    return "OpenVPN (TCP-Masked)", f"TCP:{dport if dport == 443 else sport}"
+
+    return None, None
+
 # packet and content counter
 def analyze_pcap(path, max_packets=None):   
     # Counters
@@ -202,6 +210,7 @@ def analyze_pcap(path, max_packets=None):
     tcp_flag_combo = Counter()
     sni_counts = Counter()    # SNI web-resource counter
     vpn_counts = Counter()    # VPN
+    vpn_ports = defaultdict(Counter)    # VPN ports
 
     total_packets = 0
     total_ip_endpoints = 0
@@ -271,9 +280,10 @@ def analyze_pcap(path, max_packets=None):
                         total_port_endpoints += 2
 
                         # VPN statistic
-                        vpn_proto = detect_vpn_protocols(pkt)
+                        vpn_proto, vpn_port_str = detect_vpn_and_ports(pkt)
                         if vpn_proto:
                             vpn_counts[vpn_proto] += 1
+                            vpn_ports[vpn_proto][vpn_port_str] += 1
 
                     elif proto == 1:
                         l4_counts['ICMP'] += 1
@@ -443,15 +453,6 @@ def pretty_print(tp, top_n=10):
     for flags, cnt in tp['tcp_flag_combo'].most_common():
         print(f"  {flags:8s}: {cnt:7d} {human_perc(cnt, total)}")
 
-    # VPN 
-    #print("-" * 60)
-    #print("VPN protocol distribution:")
-    #total_vpn = sum(tp['vpn_counts'].values())
-    #if total_vpn > 0:
-    #    for k, v in tp['vpn_counts'].most_common():
-    #        print(f"  {k:35s}: {v:8d} {human_perc(v, total_vpn)}")
-    #else:
-    #    print("  No VPN traffic identified.")
 
     # Top 10 Web Resources (SNI / HTTP Host)
     print("-" * 60)
@@ -463,10 +464,26 @@ def pretty_print(tp, top_n=10):
     else:
         print("  No SNI or HTTP Host entries identified.")
 
-    print("=" * 60)
+        # VPN 
+    print("-" * 60)
+    print("VPN protocol distribution & utilized ports:")
+    total_all_packets = tp['total_packets']  # База для расчета % во всем трафике
+    
+    if tp['vpn_counts']:
+        for proto, cnt in tp['vpn_counts'].most_common():
+            # Считаем точный процент присутствия данного VPN во всем pcap-файле
+            global_perc = human_perc(cnt, total_all_packets)
+            print(f"  {proto:<35} total:{cnt:7d} {global_perc}")
+            
+            # Извлекаем и выводим порты, привязанные конкретно к этому протоколу
+            ports_counter = tp['vpn_ports'][proto]
+            for port_str, p_cnt in ports_counter.most_common(5):
+                print(f"      → {port_str:<15} packets:{p_cnt}")
+    else:
+        print("  No VPN traffic identified.")
 
     # initiators 
-
+    print("=" * 60)
     print("TOP IP INITIATORS (src ≫ dst) WITH TARGETS")
 
     initiators, responders = split_initiators_responders(
