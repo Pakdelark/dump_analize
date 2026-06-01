@@ -53,6 +53,9 @@ Top 10 requested web resources (SNI / HTTP Host)
 
 ...
 
+VPN protocol distribution & utilized ports:
+	No VPN traffic identified.
+
 
 TOP IP INITIATORS (src ≫ dst) WITH TARGETS
 

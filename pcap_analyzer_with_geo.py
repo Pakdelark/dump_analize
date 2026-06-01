@@ -143,7 +143,7 @@ def extract_sni_or_host(pkt):
 
     return None
 
-# Heuristic discovery WireGuard, OpenVPN и IPsec
+# Heuristic discovery WireGuard, IPsec and OpenVPN 
 def detect_vpn_and_ports(pkt):
     # Return cortage: (Protocol_name, port or (None, None).
     if pkt.haslayer(UDP):
