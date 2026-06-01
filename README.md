@@ -18,7 +18,7 @@ In order for GEO-IP to work, it necessary download database, in the same folder 
 
 ### Format result 
 
-**example**
+*example*
 
 Total packets processed: 328
 
@@ -41,12 +41,12 @@ TLS version distribution:
 
 Top 10 IP addresses:
 
-	1. 10.10.100.10        -------         src:    174 dst:    132  46.93%
+	1. 10.10.100.10         -------         src:    174 dst:    132  46.93%
 	2. 31.14.41.239         Romania         src:     89 dst:    121  32.21%
 	3. 149.154.167.99       United Kingdom  src:     30 dst:     37  10.28%
 	4. 127.0.0.1            -------         src:     10 dst:     10   3.07%
 	5. 127.0.0.53           -------         src:     10 dst:     10   3.07%
-	6. 10.10.100.11        -------         src:     10 dst:     10   3.07%
+	6. 10.10.100.11         -------         src:     10 dst:     10   3.07%
 	7. 172.64.41.4          -------         src:      1 dst:      2   0.46%
 	8. 34.36.137.203        United States   src:      1 dst:      2   0.46%
 	9. 34.107.243.93        United States   src:      1 dst:      2   0.46%
@@ -63,7 +63,7 @@ Top 10 ports:
 	7. TCP:50500  total:     85 src:     41 dst:     44   0.60%
 	8. TCP:40474  total:     81 src:     39 dst:     42   0.57%
 	9. TCP:40660  total:     81 src:     40 dst:     41   0.57%
-	10. TCP:40552  total:     79 src:     35 dst:     44   0.56%
+	10.TCP:40552  total:     79 src:     35 dst:     44   0.56%
 
 TCP flag combinations:
 
