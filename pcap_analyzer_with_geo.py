@@ -266,6 +266,12 @@ def analyze_pcap(path, max_packets=None):
                         if tls_ver:
                             tls_counts[tls_ver] += 1
 
+                        # VPN statistic over TCP
+                        vpn_proto, vpn_port_str = detect_vpn_and_ports(pkt)
+                        if vpn_proto:
+                            vpn_counts[vpn_proto] += 1
+                            vpn_ports[vpn_proto][vpn_port_str] += 1
+
                     elif UDP in pkt:
                         l4_counts['UDP'] += 1
                         udp = pkt[UDP]
@@ -280,7 +286,7 @@ def analyze_pcap(path, max_packets=None):
                         ip_port_flows[(ip.src, 'UDP', udp.dport)] += 1
                         total_port_endpoints += 2
 
-                        # VPN statistic
+                        # VPN statistic over UDP
                         vpn_proto, vpn_port_str = detect_vpn_and_ports(pkt)
                         if vpn_proto:
                             vpn_counts[vpn_proto] += 1
