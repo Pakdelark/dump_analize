@@ -18,7 +18,7 @@ In order for GEO-IP to work, it necessary download database, in the same folder 
 
 ### Format result 
 
-*example*
+*example*:
 
 Total packets processed: 328
 
@@ -93,7 +93,7 @@ TOP IP INITIATORS (src ≫ dst) WITH TARGETS
 	1. 10.10.100.10 ------- src:174 dst:132 Δ:+42
       → 31.14.41.239                             packets:121
       → 149.154.167.99                           packets:37
-      → 10.10.100.11                            packets:10
+      → 10.10.100.11                             packets:10
       → TCP:443    packets:164
       → UDP:53     packets:10
 

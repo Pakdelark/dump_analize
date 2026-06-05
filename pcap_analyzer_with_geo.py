@@ -15,6 +15,7 @@ Accurate and fast pcap analysis:
 """
 
 import sys
+import time
 import re
 import argparse
 from collections import Counter, defaultdict 
@@ -517,15 +518,36 @@ def pretty_print(tp, top_n=10):
 
 
 def main():
+    # 1. Time - start of processing
+    start_time = time.perf_counter()
+
     parser = argparse.ArgumentParser(description="PCAP analyzer (correct & fast)")
     parser.add_argument("pcap", help="path to pcap file")
     parser.add_argument("--top", type=int, default=10)
     parser.add_argument("--max", type=int)
     args = parser.parse_args()
-
     res = analyze_pcap(args.pcap, args.max)
+
+    # 2. Time - end of processing 
+    end_time = time.perf_counter()
+
     pretty_print(res, args.top)
 
+    # Lead time - result
+    execution_time = end_time - start_time
+
+    total_packets = res.get('total_packets', 0)
+    print("******ENGINE PERFORMANCE METRICS:*******")
+    print("  Trace file:", args.pcap)
+    print(f"  Total processing time : {execution_time:.4f} seconds")
+
+    if execution_time > 0 and total_packets > 0:
+        # Packets Per Second
+        pps = total_packets / execution_time
+        print(f"  Throughput speed      : {pps:.2f} packets/sec (PPS)")
+    else:
+        print("  Throughput speed      : N/A (Zero packets or instant execution)")
+    print("=" * 60)
 
 if __name__ == "__main__":
     main()
