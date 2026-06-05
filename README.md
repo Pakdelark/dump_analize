@@ -4,7 +4,7 @@ This is instument for fast analize traffic dump on L3, L4 lvl.
 
 ### Required additional python libraries
 
- - scapy
+ - dpkt
  - geoip2 
 
 ### Launch options
@@ -97,7 +97,12 @@ TOP IP INITIATORS (src ≫ dst) WITH TARGETS
       → TCP:443    packets:164
       → UDP:53     packets:10
 
+******ENGINE PERFORMANCE METRICS:*******
 
+	
+	Trace file: big_dump.pcap
+	Total processing time : 0.1519 seconds
+	Throughput speed      : 75188.28 packets/sec (PPS)
 
 
 
