@@ -14,15 +14,15 @@ Accurate and fast pcap analysis:
 - init/resp and port
 """
 
-import sys
 import time
-import re
+import socket
+import sys
+import dpkt
 import argparse
-from collections import Counter, defaultdict 
-from scapy.all import PcapReader, TCP, UDP, IP, IPv6, ARP
 from pathlib import Path
-
+from collections import Counter, defaultdict
 # attempting to import the geoip2 library
+
 try:
     import geoip2.database
 except ImportError:
@@ -59,12 +59,8 @@ def human_perc(part, whole):
     return f"{(part / whole * 100):6.2f}%" if whole else "0.00%"
 
 # Indentificate TLS version inside packet Client Hello
-def detect_tls_version(pkt):
-    if not pkt.haslayer(TCP):
-        return None
-    
-    payload = bytes(pkt[TCP].payload)
-    if len(payload) < 12:
+def detect_tls_version(payload):
+    if not payload or len(payload) < 12:
         return None
     
     # 0x16 - Handshake record, 0x03 - TLS-pref
@@ -81,15 +77,7 @@ def detect_tls_version(pkt):
     return None
 
 # fast extraction of SNI (TLS Client Hello) or HTTP Host
-def extract_sni_or_host(pkt):
-    if TCP not in pkt:
-        return None
-    
-    try:
-        payload = bytes(pkt[TCP].payload)
-    except Exception:
-        return None
-
+def extract_sni_or_host(payload):
     if not payload:
         return None
 
@@ -145,13 +133,12 @@ def extract_sni_or_host(pkt):
     return None
 
 # Heuristic discovery WireGuard, IPsec and OpenVPN 
-def detect_vpn_and_ports(pkt):
-    # Return cortage: (Protocol_name, port or (None, None).
-    if pkt.haslayer(UDP):
-        payload = bytes(pkt[UDP].payload)
-        sport = pkt[UDP].sport
-        dport = pkt[UDP].dport
-        
+def detect_vpn_and_ports(proto_type, payload, sport, dport):
+    # Return tuple: (Protocol_name, port_str) or (None, None).
+    if not payload:
+        return None, None
+
+    if proto_type == 'UDP':
         # 1. WireGuard (Signature: 1-4 byte type + 3 byte zero)
         if len(payload) >= 4 and payload[1:4] == b'\x00\x00\x00':
             msg_type = payload[0]
@@ -172,11 +159,7 @@ def detect_vpn_and_ports(pkt):
             if 1 <= opcode <= 10 and (dport == 1194 or sport == 1194):
                 return "OpenVPN (UDP)", f"UDP:{dport if dport == 1194 else sport}"
 
-    elif pkt.haslayer(TCP):
-        payload = bytes(pkt[TCP].payload)
-        sport = pkt[TCP].sport
-        dport = pkt[TCP].dport
-        
+    elif proto_type == 'TCP':
         # 4. OpenVPN TCP (default port = 1194 and header length)
         if len(payload) >= 2:
             if dport == 1194 or sport == 1194:
@@ -192,167 +175,207 @@ def detect_vpn_and_ports(pkt):
 
 # packet and content counter
 def analyze_pcap(path, max_packets=None):   
-    # Counters
     l3_counts = Counter()
     l4_counts = Counter()
     tls_counts = Counter()
-
     ip_counts = Counter()
     ip_src_counts = Counter()
     ip_dst_counts = Counter()
-
-    port_counts = Counter()          # ('TCP', 443)
+    port_counts = Counter()          
     port_src_counts = Counter()
     port_dst_counts = Counter()
-
-    ip_flows = Counter()      # (src_ip, dst_ip)
-    ip_port_flows = Counter() # (src_ip, proto, dst_port)
-
+    ip_flows = Counter()      
+    ip_port_flows = Counter() 
     tcp_flag_combo = Counter()
-    sni_counts = Counter()    # SNI web-resource counter
-    vpn_counts = Counter()    # VPN
-    vpn_ports = defaultdict(Counter)    # VPN ports
+    sni_counts = Counter()    
+    vpn_counts = Counter()    
+    vpn_ports = defaultdict(Counter)    
 
     total_packets = 0
     total_ip_endpoints = 0
     total_port_endpoints = 0
     total_tcp_packets = 0
 
+    # Fast local function-decode
+    inet_ntoa = socket.inet_ntoa
+    inet_ntop = socket.inet_ntop
+    AF_INET6 = socket.AF_INET6
+
     try:
-        with PcapReader(path) as pcap:
-            for pkt in pcap:
+        with open(path, 'rb') as f:
+            pcap = dpkt.pcap.Reader(f)
+            
+            # detect tipe LVL (L2) 
+            datalink = pcap.datalink()
+            
+            for ts, buf in pcap:
                 total_packets += 1
                 if max_packets and total_packets > max_packets:
                     break
 
-                # ---------- IPv4 ----------
-                if IP in pkt:
-                    l3_counts['IPv4'] += 1
-                    ip = pkt[IP]
+                ip_packet = None
+                is_ipv4 = False
+                is_ipv6 = False
 
-                    ip_counts[ip.src] += 1
-                    ip_counts[ip.dst] += 1
-                    ip_src_counts[ip.src] += 1
-                    ip_dst_counts[ip.dst] += 1
-                    ip_flows[(ip.src, ip.dst)] += 1
-                    total_ip_endpoints += 2
-
-                    proto = ip.proto
-
-                    if TCP in pkt:
-                        l4_counts['TCP'] += 1
-                        tcp = pkt[TCP]
-                        total_tcp_packets += 1
-
-                        key_s = ('TCP', tcp.sport)
-                        key_d = ('TCP', tcp.dport)
-
-                        port_counts[key_s] += 1
-                        port_counts[key_d] += 1
-                        port_src_counts[key_s] += 1
-                        port_dst_counts[key_d] += 1
-                        ip_port_flows[(ip.src, 'TCP', tcp.dport)] += 1
-                        total_port_endpoints += 2
-
-                        tcp_flag_combo[str(tcp.sprintf("%TCP.flags%"))] += 1
-
-                        # Extracting Web Resources (SNI / HTTP Host) statistic
-                        web_res = extract_sni_or_host(pkt)
-                        if web_res:
-                            sni_counts[web_res] += 1
-
-                        # TLS statustic
-                        tls_ver = detect_tls_version(pkt)
-                        if tls_ver:
-                            tls_counts[tls_ver] += 1
-
-                        # VPN statistic over TCP
-                        vpn_proto, vpn_port_str = detect_vpn_and_ports(pkt)
-                        if vpn_proto:
-                            vpn_counts[vpn_proto] += 1
-                            vpn_ports[vpn_proto][vpn_port_str] += 1
-
-                    elif UDP in pkt:
-                        l4_counts['UDP'] += 1
-                        udp = pkt[UDP]
-
-                        key_s = ('UDP', udp.sport)
-                        key_d = ('UDP', udp.dport)
-
-                        port_counts[key_s] += 1
-                        port_counts[key_d] += 1
-                        port_src_counts[key_s] += 1
-                        port_dst_counts[key_d] += 1
-                        ip_port_flows[(ip.src, 'UDP', udp.dport)] += 1
-                        total_port_endpoints += 2
-
-                        # VPN statistic over UDP
-                        vpn_proto, vpn_port_str = detect_vpn_and_ports(pkt)
-                        if vpn_proto:
-                            vpn_counts[vpn_proto] += 1
-                            vpn_ports[vpn_proto][vpn_port_str] += 1
-
-                    elif proto == 1:
-                        l4_counts['ICMP'] += 1
+                # Extract network LVL (L3) depending on the structure and interface
+                try:
+                    if datalink == 1:      # DLT_EN10MB (Ethernet standart)
+                        eth = dpkt.ethernet.Ethernet(buf)
+                        if eth.type == dpkt.ethernet.ETH_TYPE_ARP:
+                            l3_counts['ARP'] += 1
+                            continue
+                        ip_packet = eth.data
+                    elif datalink == 113:  # DLT_LINUX_SLL (Linux Cooked Capture, interface 'any')
+                        sll = dpkt.sll.SLL(buf)
+                        ip_packet = sll.data
+                    elif datalink == 0:    # DLT_NULL (Loopback / local host)
+                        if len(buf) >= 4:
+                            ip_packet = buf[4:]
+                    elif datalink in (101, 12):  # DLT_RAW / DLT_LOOP (Raw IP without L2)
+                        ip_packet = buf
                     else:
-                        l4_counts[f'IP_PROTO_{proto}'] += 1
+                        # Fallback option for accidental encapsulation
+                        eth = dpkt.ethernet.Ethernet(buf)
+                        ip_packet = eth.data
 
-                # ---------- IPv6 ----------
-                elif IPv6 in pkt:
-                    l3_counts['IPv6'] += 1
-                    ip6 = pkt[IPv6]
-
-                    ip_counts[ip6.src] += 1
-                    ip_counts[ip6.dst] += 1
-                    ip_src_counts[ip6.src] += 1
-                    ip_dst_counts[ip6.dst] += 1
-                    ip_flows[(ip6.src, ip6.dst)] += 1
-                    total_ip_endpoints += 2
-
-                    if TCP in pkt:
-                        l4_counts['TCP'] += 1
-                        tcp = pkt[TCP]
-                        total_tcp_packets += 1
-
-                        key_s = ('TCP', tcp.sport)
-                        key_d = ('TCP', tcp.dport)
-
-                        port_counts[key_s] += 1
-                        port_counts[key_d] += 1
-                        port_src_counts[key_s] += 1
-                        port_dst_counts[key_d] += 1
-                        ip_port_flows[(ip6.src, 'TCP', tcp.dport)] += 1
-                        total_port_endpoints += 2
-
-                        tcp_flag_combo[str(tcp.sprintf("%TCP.flags%"))] += 1
-
-                    elif UDP in pkt:
-                        l4_counts['UDP'] += 1
-                        udp = pkt[UDP]
-
-                        key_s = ('UDP', udp.sport)
-                        key_d = ('UDP', udp.dport)
-
-                        port_counts[key_s] += 1
-                        port_counts[key_d] += 1
-                        port_src_counts[key_s] += 1
-                        port_dst_counts[key_d] += 1
-                        ip_port_flows[(ip6.src, 'UDP', udp.dport)] += 1
-                        total_port_endpoints += 2
-
-                    elif ip6.nh == 58:
-                        l4_counts['ICMPv6'] += 1
-                    else:
-                        l4_counts[f'IP6_NH_{ip6.nh}'] += 1
-
-                # ---------- ARP ----------
-                elif ARP in pkt:
-                    l3_counts['ARP'] += 1
-
-                else:
+                    # Forcefully decode raw bytes if dpkt hasn't done so itself
+                    if isinstance(ip_packet, dpkt.ip.IP):
+                        is_ipv4 = True
+                    elif isinstance(ip_packet, dpkt.ip6.IP6):
+                        is_ipv6 = True
+                    elif isinstance(ip_packet, bytes) and len(ip_packet) > 0:
+                        version = ip_packet[0] >> 4
+                        if version == 4:
+                            ip_packet = dpkt.ip.IP(ip_packet)
+                            is_ipv4 = True
+                        elif version == 6:
+                            ip_packet = dpkt.ip6.IP6(ip_packet)
+                            is_ipv6 = True
+                except Exception:
                     l3_counts['OTHER'] += 1
+                    continue
 
-    # input error handling
+                if not (is_ipv4 or is_ipv6):
+                    l3_counts['OTHER'] += 1
+                    continue
+
+                # Extracting IP addresses and L4 protocol code
+                try:
+                    if is_ipv4:
+                        l3_counts['IPv4'] += 1
+                        src_ip = inet_ntoa(ip_packet.src)
+                        dst_ip = inet_ntoa(ip_packet.dst)
+                        proto = ip_packet.p
+                        l4_payload_raw = ip_packet.data
+                    else:
+                        l3_counts['IPv6'] += 1
+                        src_ip = inet_ntop(AF_INET6, ip_packet.src)
+                        dst_ip = inet_ntop(AF_INET6, ip_packet.dst)
+                        proto = ip_packet.nxt
+                        l4_payload_raw = ip_packet.data
+                except Exception:
+                    continue
+
+                # IP-statistic
+                ip_counts[src_ip] += 1
+                ip_counts[dst_ip] += 1
+                ip_src_counts[src_ip] += 1
+                ip_dst_counts[dst_ip] += 1
+                ip_flows[(src_ip, dst_ip)] += 1
+                total_ip_endpoints += 2
+
+                # ---------- TCP Processing ----------
+                if proto == 6:  
+                    l4_counts['TCP'] += 1
+                    total_tcp_packets += 1
+                    
+                    try:
+                        # validation TCP
+                        if isinstance(l4_payload_raw, dpkt.tcp.TCP):
+                            tcp = l4_payload_raw
+                        else:
+                            tcp = dpkt.tcp.TCP(l4_payload_raw)
+                        
+                        sport = tcp.sport
+                        dport = tcp.dport
+                        payload = tcp.data
+                    except Exception:
+                        continue
+
+                    key_s = ('TCP', sport)
+                    key_d = ('TCP', dport)
+                    port_counts[key_s] += 1
+                    port_counts[key_d] += 1
+                    port_src_counts[key_s] += 1
+                    port_dst_counts[key_d] += 1
+                    ip_port_flows[(src_ip, 'TCP', dport)] += 1
+                    total_port_endpoints += 2
+
+                    # TCP flags (FSRPAUEC)
+                    flags = tcp.flags
+                    flags_str = ""
+                    if flags & 0x01: flags_str += "F"  # FIN
+                    if flags & 0x02: flags_str += "S"  # SYN
+                    if flags & 0x04: flags_str += "R"  # RST
+                    if flags & 0x08: flags_str += "P"  # PSH
+                    if flags & 0x10: flags_str += "A"  # ACK
+                    if flags & 0x20: flags_str += "U"  # URG
+                    if flags & 0x40: flags_str += "E"  # ECE
+                    if flags & 0x80: flags_str += "C"  # CWR
+                    tcp_flag_combo[flags_str or "."] += 1
+
+                    # Analize (Payload) SNI, TLS, VPN - count
+                    if payload:
+                        web_res = extract_sni_or_host(payload)
+                        if web_res: sni_counts[web_res] += 1
+
+                        tls_ver = detect_tls_version(payload)
+                        if tls_ver: tls_counts[tls_ver] += 1
+                            
+                        vpn_proto, vpn_port_str = detect_vpn_and_ports('TCP', payload, sport, dport)
+                        if vpn_proto:
+                            vpn_counts[vpn_proto] += 1
+                            vpn_ports[vpn_proto][vpn_port_str] += 1
+
+                # ---------- UDP Processing ----------
+                elif proto == 17:  
+                    l4_counts['UDP'] += 1
+                    
+                    try:
+                        if isinstance(l4_payload_raw, dpkt.udp.UDP):
+                            udp = l4_payload_raw
+                        else:
+                            udp = dpkt.udp.UDP(l4_payload_raw)
+                        
+                        sport = udp.sport
+                        dport = udp.dport
+                        payload = udp.data
+                    except Exception:
+                        continue
+
+                    key_s = ('UDP', sport)
+                    key_d = ('UDP', dport)
+                    port_counts[key_s] += 1
+                    port_counts[key_d] += 1
+                    port_src_counts[key_s] += 1
+                    port_dst_counts[key_d] += 1
+                    ip_port_flows[(src_ip, 'UDP', dport)] += 1
+                    total_port_endpoints += 2
+
+                    if payload:
+                        vpn_proto, vpn_port_str = detect_vpn_and_ports('UDP', payload, sport, dport)
+                        if vpn_proto:
+                            vpn_counts[vpn_proto] += 1
+                            vpn_ports[vpn_proto][vpn_port_str] += 1
+
+                # ---------- Other L4 protocols ----------
+                elif proto == 1:  
+                    l4_counts['ICMP'] += 1
+                elif proto == 58:  
+                    l4_counts['ICMPv6'] += 1
+                else:
+                    l4_counts[f'PROTO_{proto}'] += 1
+
     except FileNotFoundError:   
         print(f"File not found: {path}", file=sys.stderr)
         sys.exit(2)
@@ -374,12 +397,14 @@ def analyze_pcap(path, max_packets=None):
         'tcp_flag_combo': tcp_flag_combo,
         'sni_counts': sni_counts,
         'vpn_counts': vpn_counts,
+        'vpn_ports': vpn_ports,        
         'total_ip_endpoints': total_ip_endpoints,
         'total_port_endpoints': total_port_endpoints,
         'total_tcp_packets': total_tcp_packets,
         'ip_flows': ip_flows,
         'ip_port_flows': ip_port_flows,
     }
+
 # defining the connection initiator
 def split_initiators_responders(src_counter, dst_counter, top_n=10):  
     roles = []
@@ -434,7 +459,7 @@ def pretty_print(tp, top_n=10):
         print("  No TLS handshake packets identified.")
     print("-" * 60)
     
-    # top ip adresses
+    # Top IP adresses
     print(f"Top {top_n} IP addresses:")
     total = tp['total_ip_endpoints']
     for i, (ip, cnt) in enumerate(tp['ip_counts'].most_common(top_n), 1):
@@ -443,7 +468,7 @@ def pretty_print(tp, top_n=10):
               f"src:{tp['ip_src_counts'][ip]:7d} "
               f"dst:{tp['ip_dst_counts'][ip]:7d} "
               f"{human_perc(cnt, total)}")
-    # top ports
+    # Top ports
     print("-" * 60)
     print(f"Top {top_n} ports:")
     total = tp['total_port_endpoints']
@@ -471,7 +496,7 @@ def pretty_print(tp, top_n=10):
     else:
         print("  No SNI or HTTP Host entries identified.")
 
-        # VPN 
+    # VPN 
     print("-" * 60)
     print("VPN protocol distribution & utilized ports:")
     total_all_packets = tp['total_packets']  # База для расчета % во всем трафике
@@ -489,7 +514,7 @@ def pretty_print(tp, top_n=10):
     else:
         print("  No VPN traffic identified.")
 
-    # initiators 
+    # Initiators 
     print("=" * 60)
     print("TOP IP INITIATORS (src ≫ dst) WITH TARGETS")
 
