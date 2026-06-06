@@ -12,6 +12,7 @@ Accurate and fast pcap analysis:
 - VPN
 - SNI
 - init/resp and port
+- ENGINE PERFORMANCE METRICS
 """
 
 import time
@@ -189,7 +190,8 @@ def analyze_pcap(path, max_packets=None):
     tcp_flag_combo = Counter()
     sni_counts = Counter()    
     vpn_counts = Counter()    
-    vpn_ports = defaultdict(Counter)    
+    vpn_ports = defaultdict(Counter)
+    dns_query_counts = Counter()
 
     total_packets = 0
     total_ip_endpoints = 0
@@ -363,6 +365,22 @@ def analyze_pcap(path, max_packets=None):
                     total_port_endpoints += 2
 
                     if payload:
+                        # ---------- Deep analize DNS (standart port 53) ----------
+                        if sport == 53 or dport == 53:
+                            try:
+                                dns = dpkt.dns.DNS(payload)
+                                # cheak (queries) in package
+                                if dns.qd:
+                                    for q in dns.qd:
+                                        domain = q.name
+                                        if isinstance(domain, bytes):
+                                            domain = domain.decode('utf-8', errors='ignore')
+                                        if domain:
+                                            dns_query_counts[domain] += 1
+                            except Exception:
+                                pass # Ignore package, if it wasn't DNS-traffic
+
+                        # ---------- Count VPN proto ---------
                         vpn_proto, vpn_port_str = detect_vpn_and_ports('UDP', payload, sport, dport)
                         if vpn_proto:
                             vpn_counts[vpn_proto] += 1
@@ -397,7 +415,8 @@ def analyze_pcap(path, max_packets=None):
         'tcp_flag_combo': tcp_flag_combo,
         'sni_counts': sni_counts,
         'vpn_counts': vpn_counts,
-        'vpn_ports': vpn_ports,        
+        'vpn_ports': vpn_ports,
+        'dns_query_counts': dns_query_counts,
         'total_ip_endpoints': total_ip_endpoints,
         'total_port_endpoints': total_port_endpoints,
         'total_tcp_packets': total_tcp_packets,
@@ -496,6 +515,16 @@ def pretty_print(tp, top_n=10):
     else:
         print("  No SNI or HTTP Host entries identified.")
 
+    # DNS
+    print("-" * 60)
+    print(f"Top {top_n} DNS Queries (Requested Domain Names):")
+    total_dns = sum(tp['dns_query_counts'].values())
+    if total_dns > 0:
+        for i, (domain, cnt) in enumerate(tp['dns_query_counts'].most_common(top_n), 1):
+            print(f"{i:2d}. {domain:<40} total:{cnt:7d} {human_perc(cnt, total_dns)}")
+    else:
+        print("  No DNS query packets identified.")
+
     # VPN 
     print("-" * 60)
     print("VPN protocol distribution & utilized ports:")
@@ -554,7 +583,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="PCAP analyzer (correct & fast)")
     parser.add_argument("pcap", help="path to pcap file")
-    parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--top", type=int, default=10)  # up/down defaul value
     parser.add_argument("--max", type=int)
     args = parser.parse_args()
     res = analyze_pcap(args.pcap, args.max)

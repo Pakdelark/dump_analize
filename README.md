@@ -82,6 +82,18 @@ Top 10 requested web resources (SNI / HTTP Host)
 	2. t.me                                     total:      1  14.29%
 	3. telegram.me                              total:      1  14.29%
 
+Top 10 DNS Queries (Requested Domain Names):
+ 	
+ 	1. chatgpt.com                              total:     84  11.60%
+ 	2. rr4---sn-5hnekn7k.googlevideo.com        total:     64   8.84%
+ 	3. mozilla.cloudflare-dns.com               total:     46   6.35%
+ 	4. connectivity-check.ubuntu.com            total:     32   4.42%
+ 	5. www.google.com                           total:     20   2.76%
+ 	6. lh3.googleusercontent.com                total:     16   2.21%
+ 	7. fonts.gstatic.com                        total:     16   2.21%
+ 	8. www.gstatic.com                          total:     16   2.21%
+ 	9. csp.withgoogle.com                       total:     16   2.21%
+	10. security.ubuntu.com                     total:     16   2.21%
 
 VPN protocol distribution & utilized ports:
 
