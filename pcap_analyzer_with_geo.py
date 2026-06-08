@@ -59,6 +59,18 @@ def geo_country(reader, ip):
 def human_perc(part, whole):
     return f"{(part / whole * 100):6.2f}%" if whole else "0.00%"
 
+# presentation and translation
+def human_traffic(bytes_count, active_secs_set=None):
+    mb = bytes_count / (1024 * 1024)
+    
+    if active_secs_set:
+        duration = len(active_secs_set)  # For how many seconds was data actually being transmitted?
+        if duration > 0:
+            mbps = (bytes_count * 8) / 1_000_000 / duration
+            return f"{mb:8.2f} MB {mbps:6.2f} Mbps"
+            
+    return f"{mb:8.2f} MB   0.00 Mbps"
+
 # Indentificate TLS version inside packet Client Hello
 def detect_tls_version(payload):
     if not payload or len(payload) < 12:
@@ -193,6 +205,22 @@ def analyze_pcap(path, max_packets=None):
     vpn_ports = defaultdict(Counter)
     dns_query_counts = Counter()
 
+    # Mb and mbps
+    l3_bytes = Counter()
+    l4_bytes = Counter()
+    ip_bytes = Counter()
+    port_bytes = Counter()
+    dns_bytes = Counter()
+    sni_bytes = Counter()
+
+    # dict for recording the time (count mbps)
+    ip_active_seconds = defaultdict(set)
+    port_active_seconds = defaultdict(set)
+    l3_active_seconds = defaultdict(set)
+    l4_active_seconds = defaultdict(set)
+    dns_active_seconds = defaultdict(set)
+    sni_active_seconds = defaultdict(set)
+
     total_packets = 0
     total_ip_endpoints = 0
     total_port_endpoints = 0
@@ -279,12 +307,24 @@ def analyze_pcap(path, max_packets=None):
                     continue
 
                 # IP-statistic
+                pkt_size = len(buf)  # Packet size in bytes
                 ip_counts[src_ip] += 1
                 ip_counts[dst_ip] += 1
                 ip_src_counts[src_ip] += 1
                 ip_dst_counts[dst_ip] += 1
                 ip_flows[(src_ip, dst_ip)] += 1
                 total_ip_endpoints += 2
+                ip_bytes[src_ip] += pkt_size
+                ip_bytes[dst_ip] += pkt_size
+                l3_bytes['IPv4' if is_ipv4 else 'IPv6'] += pkt_size
+
+                # Select the current second of the packet
+                sec_bucket = int(ts)
+                
+                # Recorded active second for hosts and the L3 protocol
+                ip_active_seconds[src_ip].add(sec_bucket)
+                ip_active_seconds[dst_ip].add(sec_bucket)
+                l3_active_seconds['IPv4' if is_ipv4 else 'IPv6'].add(sec_bucket)
 
                 # ---------- TCP Processing ----------
                 if proto == 6:  
@@ -313,6 +353,14 @@ def analyze_pcap(path, max_packets=None):
                     ip_port_flows[(src_ip, 'TCP', dport)] += 1
                     total_port_endpoints += 2
 
+                    # Byte and active second filling for TCP
+                    l4_bytes['TCP'] += pkt_size
+                    port_bytes[key_s] += pkt_size
+                    port_bytes[key_d] += pkt_size
+                    l4_active_seconds['TCP'].add(sec_bucket)
+                    port_active_seconds[key_s].add(sec_bucket)
+                    port_active_seconds[key_d].add(sec_bucket)
+
                     # TCP flags (FSRPAUEC)
                     flags = tcp.flags
                     flags_str = ""
@@ -329,7 +377,8 @@ def analyze_pcap(path, max_packets=None):
                     # Analize (Payload) SNI, TLS, VPN - count
                     if payload:
                         web_res = extract_sni_or_host(payload)
-                        if web_res: sni_counts[web_res] += 1
+                        if web_res: 
+                            sni_counts[web_res] += 1
 
                         tls_ver = detect_tls_version(payload)
                         if tls_ver: tls_counts[tls_ver] += 1
@@ -364,6 +413,13 @@ def analyze_pcap(path, max_packets=None):
                     ip_port_flows[(src_ip, 'UDP', dport)] += 1
                     total_port_endpoints += 2
 
+                    # Byte and active second filling for UDP
+                    l4_bytes['UDP'] += pkt_size
+                    port_bytes[key_s] += pkt_size
+                    port_bytes[key_d] += pkt_size
+                    l4_active_seconds['UDP'].add(sec_bucket)
+                    port_active_seconds[key_s].add(sec_bucket)
+                    port_active_seconds[key_d].add(sec_bucket)
                     if payload:
                         # ---------- Deep analize DNS (standart port 53) ----------
                         if sport == 53 or dport == 53:
@@ -389,10 +445,32 @@ def analyze_pcap(path, max_packets=None):
                 # ---------- Other L4 protocols ----------
                 elif proto == 1:  
                     l4_counts['ICMP'] += 1
+                    # Byte and active second filling for ICMP
+                    l4_bytes['ICMP'] += pkt_size
+                    port_bytes[key_s] += pkt_size
+                    port_bytes[key_d] += pkt_size
+                    l4_active_seconds['ICMP'].add(sec_bucket)
+                    port_active_seconds[key_s].add(sec_bucket)
+                    port_active_seconds[key_d].add(sec_bucket)
                 elif proto == 58:  
                     l4_counts['ICMPv6'] += 1
+                    # Byte and active second filling for ICMPv6
+                    l4_bytes['ICMPv6'] += pkt_size
+                    port_bytes[key_s] += pkt_size
+                    port_bytes[key_d] += pkt_size
+                    l4_active_seconds['ICMPv6'].add(sec_bucket)
+                    port_active_seconds[key_s].add(sec_bucket)
+                    port_active_seconds[key_d].add(sec_bucket)
                 else:
-                    l4_counts[f'PROTO_{proto}'] += 1
+                    proto_name = f'PROTO_{proto}'
+                    l4_counts[proto_name] += 1
+                    # Byte and timestamp filling for ICMPv6
+                    l4_bytes[proto_name] += pkt_size
+                    port_bytes[key_s] += pkt_size
+                    port_bytes[key_d] += pkt_size
+                    l4_active_seconds[proto_name].add(sec_bucket)
+                    port_active_seconds[key_s].add(sec_bucket)
+                    port_active_seconds[key_d].add(sec_bucket)
 
     except FileNotFoundError:   
         print(f"File not found: {path}", file=sys.stderr)
@@ -422,6 +500,14 @@ def analyze_pcap(path, max_packets=None):
         'total_tcp_packets': total_tcp_packets,
         'ip_flows': ip_flows,
         'ip_port_flows': ip_port_flows,
+        'ip_bytes': ip_bytes,
+        'port_bytes': port_bytes,
+        'l3_bytes': l3_bytes,
+        'l4_bytes': l4_bytes,
+        'ip_active_seconds': ip_active_seconds,
+        'port_active_seconds': port_active_seconds,
+        'l3_active_seconds': l3_active_seconds,
+        'l4_active_seconds': l4_active_seconds,
     }
 
 # defining the connection initiator
@@ -457,13 +543,17 @@ def pretty_print(tp, top_n=10):
     print("L3 protocol distribution:")
     total = sum(tp['l3_counts'].values())
     for k, v in tp['l3_counts'].most_common():
-        print(f"  {k:12s}: {v:8d} {human_perc(v, total)}")
+        ts_r = tp['l3_active_seconds'].get(k)
+        traffic_str = human_traffic(tp['l3_bytes'][k], ts_r)
+        print(f"  {k:12s}: {v:8d} {human_perc(v, total)} |{traffic_str}")
 
     print("-" * 60)
     print("L4 protocol distribution:")
     total = sum(tp['l4_counts'].values())
     for k, v in tp['l4_counts'].most_common():
-        print(f"  {k:12s}: {v:8d} {human_perc(v, total)}")
+        ts_r = tp['l4_active_seconds'].get(k)
+        traffic_str = human_traffic(tp['l4_bytes'][k], ts_r)
+        print(f"  {k:12s}: {v:8d} {human_perc(v, total)} |{traffic_str}")
 
     print("-" * 60)
     geo = init_geoip()  # attempt to initialize the GEO function
@@ -483,19 +573,26 @@ def pretty_print(tp, top_n=10):
     total = tp['total_ip_endpoints']
     for i, (ip, cnt) in enumerate(tp['ip_counts'].most_common(top_n), 1):
         country = geo_country(geo, ip)  # GEO
-        print(f"{i:2d}. {ip:20s} {country:15s} "
+        ts_r = tp['ip_active_seconds'].get(ip)
+        traffic_str = human_traffic(tp['ip_bytes'][ip], ts_r)
+        
+        print(f"{i:2d}. {ip:18s} {country:16s} "
               f"src:{tp['ip_src_counts'][ip]:7d} "
               f"dst:{tp['ip_dst_counts'][ip]:7d} "
-              f"{human_perc(cnt, total)}")
+              f"{human_perc(cnt, total)} |{traffic_str}")
+
     # Top ports
     print("-" * 60)
     print(f"Top {top_n} ports:")
     total = tp['total_port_endpoints']
     for i, ((proto, port), cnt) in enumerate(tp['port_counts'].most_common(top_n), 1):
+        key = (proto, port)
+        active_secs = tp['port_active_seconds'].get(key)
+        traffic_str = human_traffic(tp['port_bytes'][key], active_secs)
         print(f"{i:2d}. {proto}:{port:<6} total:{cnt:7d} "
               f"src:{tp['port_src_counts'][(proto, port)]:7d} "
               f"dst:{tp['port_dst_counts'][(proto, port)]:7d} "
-              f"{human_perc(cnt, total)}")
+              f"{human_perc(cnt, total)} |{traffic_str}")
 
     # TCP - flags
     print("-" * 60)
