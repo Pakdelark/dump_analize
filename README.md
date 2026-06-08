@@ -24,14 +24,16 @@ Total packets processed: 328
 
 L3 protocol distribution:
 
-	IPv4        :      326  99.39%
-	ARP         :        2   0.61%
+  	IPv4        :    11362  99.47% |    7.77 MB   0.10 Mbps
+  	OTHER       :       58   0.51% |    0.00 MB   0.00 Mbps
+  	IPv6        :        2   0.02% |    0.00 MB   0.00 Mbps
 
 
 L4 protocol distribution:
 
-	TCP         :      286  87.73%
-	UDP         :       40  12.27%
+	TCP         :     9957  87.62% |    7.35 MB   0.10 Mbps
+	UDP         :     1405  12.36% |    0.42 MB   0.03 Mbps
+	ICMPv6      :        2   0.02% |    0.00 MB   0.00 Mbps
 
 
 TLS version distribution:
@@ -116,5 +118,8 @@ TOP IP INITIATORS (src ≫ dst) WITH TARGETS
 	Total processing time : 0.1519 seconds
 	Throughput speed      : 75188.28 packets/sec (PPS)
 
+	Capture Start Time : 04-01-2026 10:07:39
+	Capture End Time   : 04-01-2026 10:47:09
+	Total Capture Duration: 2371 seconds
 
 

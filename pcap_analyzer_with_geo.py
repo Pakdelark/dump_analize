@@ -22,6 +22,7 @@ import dpkt
 import argparse
 from pathlib import Path
 from collections import Counter, defaultdict
+from datetime import datetime
 # attempting to import the geoip2 library
 
 try:
@@ -237,8 +238,15 @@ def analyze_pcap(path, max_packets=None):
             
             # detect tipe LVL (L2) 
             datalink = pcap.datalink()
+
+            # packet time
+            first_packet_ts = None
+            last_packet_ts = None
             
             for ts, buf in pcap:
+                if first_packet_ts is None:
+                    first_packet_ts = ts
+                last_packet_ts = ts
                 total_packets += 1
                 if max_packets and total_packets > max_packets:
                     break
@@ -508,6 +516,8 @@ def analyze_pcap(path, max_packets=None):
         'port_active_seconds': port_active_seconds,
         'l3_active_seconds': l3_active_seconds,
         'l4_active_seconds': l4_active_seconds,
+        'first_packet_ts': first_packet_ts,
+        'last_packet_ts': last_packet_ts,
     }
 
 # defining the connection initiator
@@ -594,7 +604,7 @@ def pretty_print(tp, top_n=10):
               f"dst:{tp['port_dst_counts'][(proto, port)]:7d} "
               f"{human_perc(cnt, total)} |{traffic_str}")
 
-    # TCP - flags
+    # TCP flags
     print("-" * 60)
     print("TCP flag combinations:")
     total = tp['total_tcp_packets']
@@ -704,6 +714,23 @@ def main():
         print(f"  Throughput speed      : {pps:.2f} packets/sec (PPS)")
     else:
         print("  Throughput speed      : N/A (Zero packets or instant execution)")
+    
+    print("-" * 60)
+    
+    # packet time
+    start_ts = res.get('first_packet_ts')
+    end_ts = res.get('last_packet_ts')
+    
+    if start_ts and end_ts:
+        start_time = datetime.fromtimestamp(start_ts).strftime('%d-%m-%Y %H:%M:%S.%f')[:-7]
+        end_time = datetime.fromtimestamp(end_ts).strftime('%d-%m-%Y %H:%M:%S.%f')[:-7]
+        duration = end_ts - start_ts
+        print(f"  Capture Start Time : {start_time}")
+        print(f"  Capture End Time   : {end_time}")
+        print(f"  Total Capture Duration: {duration:.0f} seconds")
+    else:
+        print("  Capture Time Range : Unknown (No packets or timestamps)")
+
     print("=" * 60)
 
 if __name__ == "__main__":
