@@ -111,7 +111,7 @@ TOP IP INITIATORS (src ≫ dst) WITH TARGETS
       → TCP:443    packets:164
       → UDP:53     packets:10
 
-******ENGINE PERFORMANCE METRICS:*******
+\*\*\*\*\*\*ENGINE PERFORMANCE METRICS:\*\*\*\*\*\*\*
 
 	
 	Trace file: big_dump.pcap

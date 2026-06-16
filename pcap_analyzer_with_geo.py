@@ -234,7 +234,13 @@ def analyze_pcap(path, max_packets=None):
 
     try:
         with open(path, 'rb') as f:
-            pcap = dpkt.pcap.Reader(f)
+            cheak_format = f.read(4)  # read firs 4 byte to determine the file format
+            f.seek(0)  # reset the file pointer to the beginning of the file after checking
+            
+            if cheak_format == b'\x0a\x0d\x0d\x0a':
+                pcap = dpkt.pcapng.Reader(f)
+            else:
+                pcap = dpkt.pcap.Reader(f)
             
             # detect tipe LVL (L2) 
             datalink = pcap.datalink()
@@ -663,13 +669,13 @@ def pretty_print(tp, top_n=10):
         country = geo_country(geo, src_ip)
         print(f"\n{i:2d}. {src_ip} {country} src:{src_cnt} dst:{dst_cnt} Δ:{delta:+}")
 
-        # Куда этот IP слал пакеты
+        # Where was this IP sending packets
         targets = Counter(
             {dst: c for (s, dst), c in tp['ip_flows'].items() if s == src_ip}
         )
 
         for dst_ip, cnt in targets.most_common(3):
-            print(f"      → {dst_ip:<40} packets:{cnt}")
+            print(f"      ↳ {dst_ip:<40} packets:{cnt}")
 
         # Which ports this IP sent traffic to
         ports = Counter(
