@@ -630,15 +630,13 @@ def pretty_print(tp, top_n=10):
 	# VPN 
 	print("-" * 60)
 	print("VPN protocol distribution & utilized ports:")
-	total_all_packets = tp['total_packets']  # База для расчета % во всем трафике
+	total_all_packets = tp['total_packets'] 
 	
 	if tp['vpn_counts']:
 		for proto, cnt in tp['vpn_counts'].most_common():
-			# Считаем точный процент присутствия данного VPN во всем pcap-файле
 			global_perc = human_perc(cnt, total_all_packets)
 			print(f"  {proto:<35} total:{cnt:7d} {global_perc}")
 			
-			# Извлекаем и выводим порты, привязанные конкретно к этому протоколу
 			ports_counter = tp['vpn_ports'][proto]
 			for port_str, p_cnt in ports_counter.most_common(5):
 				print(f"	  → {port_str:<15} packets:{p_cnt}")
@@ -686,9 +684,9 @@ def main():
 	parser = argparse.ArgumentParser(description="PCAP analyzer (correct & fast)")
 	parser.add_argument("pcap", help="path to pcap file")
 	parser.add_argument("--top", type=int, default=10)  # up/down defaul value
-	parser.add_argument("--max", type=int)
+	parser.add_argument("--pack", type=int)
 	args = parser.parse_args()
-	res = analyze_pcap(args.pcap, args.max)
+	res = analyze_pcap(args.pcap, args.pack)
 
 	# 2. Time - end of processing 
 	end_time = time.perf_counter()
