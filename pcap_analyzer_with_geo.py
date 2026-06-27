@@ -227,6 +227,7 @@ def analyze_pcap(path, max_packets=None):
 	total_ip_endpoints = 0
 	total_port_endpoints = 0
 	total_tcp_packets = 0
+	fragmented_packets = 0
 
 	# Fast local function-decode
 	inet_ntoa = socket.inet_ntoa
@@ -312,12 +313,31 @@ def analyze_pcap(path, max_packets=None):
 						dst_ip = inet_ntoa(ip_packet.dst)
 						proto = ip_packet.p
 						l4_payload_raw = ip_packet.data
+						# IPv4 fragmintation check
+						# RF=0x8000, DF=0x4000, MF=0x2000, Offset=0x1FF
+						try:
+							mf_flag = bool(ip_packet.mf)
+							frag_offset = ip_packet.offset
+						except AttributeError:
+							# Резервный вариант
+							mf_flag = bool(ip_packet.off & 0x2000)
+							frag_offset = ip_packet.off & 0x1FFF
+						
+						if mf_flag or frag_offset > 0:
+							fragmented_packets += 1
 					else:
 						l3_counts['IPv6'] += 1
 						src_ip = inet_ntop(AF_INET6, ip_packet.src)
 						dst_ip = inet_ntop(AF_INET6, ip_packet.dst)
 						proto = ip_packet.nxt
 						l4_payload_raw = ip_packet.data
+
+						# IPv6 fragmintation check
+						if hasattr(ip_packet, 'extension_hdrs'):
+							for ex_hdr in ip_packet.extension_hdrs:
+								if isinstance(ex_hdr, dpkt.ip6.IP6FragmentHeader):
+									fragmented_packets += 1
+									break
 				except Exception:
 					continue
 
@@ -485,6 +505,7 @@ def analyze_pcap(path, max_packets=None):
 	return {
 		'total_packets': total_packets,
 		'l3_counts': l3_counts,
+		'fragmented_packets': fragmented_packets,
 		'l4_counts': l4_counts,
 		'ip_counts': ip_counts,
 		'tls_counts': tls_counts,
@@ -551,7 +572,12 @@ def pretty_print(tp, top_n=10):
 		ts_r = tp['l3_active_seconds'].get(k)
 		traffic_str = human_traffic(tp['l3_bytes'][k], ts_r)
 		print(f"  {k:12s}: {v:8d} {human_perc(v, total)} |{traffic_str}")
-
+	# fragmentation
+	frag_cnt = tp.get('fragmented_packets', 0)
+	frag_perc = human_perc(frag_cnt, tp['total_packets'])
+	if frag_cnt != 0:
+		print(f"  Fragmented  : {frag_cnt:8d} {frag_perc}")
+	
 	print("-" * 60)
 	print("L4 protocol distribution:")
 	total = sum(tp['l4_counts'].values())
