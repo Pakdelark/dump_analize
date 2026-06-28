@@ -24,6 +24,7 @@ import argparse
 from pathlib import Path
 from collections import Counter, defaultdict
 from datetime import datetime
+import subprocess
 # attempting to import the geoip2 library
 
 try:
@@ -36,16 +37,36 @@ def init_geoip():
 	base_dir = Path(__file__).resolve().parent
 	db_path = base_dir / "GeoLite2-Country.mmdb"
 
-	if not geoip2:
+	if not geoip2 or not db_path.is_file():
 		return None
-
-	if not db_path.is_file():
-		return None
-
 	try:
 		return geoip2.database.Reader(db_path)
 	except Exception:
 		return None
+
+# launch ASN if the GeoLite2-ASN.mmdb file is in the directory
+def init_asn_db():
+	base_dir = Path(__file__).resolve().parent
+	db_path = base_dir / "GeoLite2-ASN.mmdb"
+
+	if not geoip2 or not db_path.is_file():
+		return None 
+	try:
+		return geoip2.database.Reader(db_path)
+	except Exception:
+		return None 
+
+def get_ip_asn(reader, ip):
+	if not reader:
+		return "AS_UNKNOWN", "-------"
+	try:
+		response = reader.asn(ip)
+		asn_str = f"AS{response.autonomous_system_number} ({response.autonomous_system_organization})"
+		network_cidr = str(response.network) if response.network else "-------"
+		return asn_str, network_cidr
+	except Exception:
+		return "AS_UNKNOWN", "-------"
+
 # if the country is not found, returns dashes
 def geo_country(reader, ip):	
 	if not reader:
@@ -188,7 +209,7 @@ def detect_vpn_and_ports(proto_type, payload, sport, dport):
 
 	return None, None
 
-# packet and content counter
+# ---------------- packet and content counter --------------------
 def analyze_pcap(path, max_packets=None):   
 	l3_counts = Counter()
 	l4_counts = Counter()
@@ -559,11 +580,20 @@ def split_initiators_responders(src_counter, dst_counter, top_n=10):
 
 	return initiators, responders
 
-# global output 
+# --------------- Global output -------------------
 def pretty_print(tp, top_n=10):
 
 	print("=" * 60)
 	print(f"Total packets processed: {tp['total_packets']}")
+	
+	# find ASN for top dst IP adress
+	geo_asn_reader = init_asn_db()
+	if tp['ip_dst_counts']:
+		top_dst_ip, top_dst_cnt = tp['ip_dst_counts'].most_common(1)[0]
+		asn_info, network_cidr = get_ip_asn(geo_asn_reader, top_dst_ip)
+		print(f"--> dst: {asn_info} CIDR:{network_cidr}")
+	else:
+		print("--> dst: No IP destination traffic found")
 	print("-" * 60)
 
 	print("L3 protocol distribution:")
@@ -702,6 +732,7 @@ def pretty_print(tp, top_n=10):
 
 	print("=" * 60)
 
+# ---------------- last form --------------------------
 
 def main():
 	# 1. Time - start of processing
