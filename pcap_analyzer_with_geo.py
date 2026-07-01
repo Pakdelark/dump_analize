@@ -244,6 +244,8 @@ def analyze_pcap(path, max_packets=None):
 	dns_active_seconds = defaultdict(set)
 	sni_active_seconds = defaultdict(set)
 
+	tcp_next_seq = {}
+	tcp_out_of_order_packets = 0
 	total_packets = 0
 	total_ip_endpoints = 0
 	total_port_endpoints = 0
@@ -444,6 +446,25 @@ def analyze_pcap(path, max_packets=None):
 							vpn_counts[vpn_proto] += 1
 							vpn_ports[vpn_proto][vpn_port_str] += 1
 
+					# Analize TCP Out-of-Order
+					payload_len = len(payload)
+					if payload_len > 0 or (flags & 0x02) or (flags & 0x01):
+						flow_key = (src_ip, sport, dst_ip, dport)
+						current_seq = tcp.seq
+						if flow_key in tcp_next_seq:
+							# if seq number < seq number inc/out in the flow ^ != seq number
+							expected_seq = tcp_next_seq[flow_key]
+							if current_seq < expected_seq:
+								tcp_out_of_order_packets += 1
+
+						# Calculate the next expected resutl for this direction
+						flags_weight = 1 if (flags & 0x02 or flags & 0x01) else 0
+						next_seq = current_seq + payload_len + flags_weight
+
+						# Update max expected seq for flow
+						if flow_key not in tcp_next_seq or next_seq > tcp_next_seq[flow_key]:
+							tcp_next_seq[flow_key] = next_seq
+
 				# ---------- UDP Processing ----------
 				elif proto == 17:  
 					l4_counts['UDP'] += 1
@@ -527,6 +548,7 @@ def analyze_pcap(path, max_packets=None):
 		'total_packets': total_packets,
 		'l3_counts': l3_counts,
 		'fragmented_packets': fragmented_packets,
+		'tcp_out_of_order_packets': tcp_out_of_order_packets,
 		'l4_counts': l4_counts,
 		'ip_counts': ip_counts,
 		'tls_counts': tls_counts,
@@ -591,7 +613,7 @@ def pretty_print(tp, top_n=10):
 	if tp['ip_dst_counts']:
 		top_dst_ip, top_dst_cnt = tp['ip_dst_counts'].most_common(1)[0]
 		asn_info, network_cidr = get_ip_asn(geo_asn_reader, top_dst_ip)
-		print(f"--> dst: {asn_info} CIDR:{network_cidr}")
+		print(f"  {asn_info} CIDR : {network_cidr}")
 	else:
 		print("--> dst: No IP destination traffic found")
 	print("-" * 60)
@@ -602,12 +624,19 @@ def pretty_print(tp, top_n=10):
 		ts_r = tp['l3_active_seconds'].get(k)
 		traffic_str = human_traffic(tp['l3_bytes'][k], ts_r)
 		print(f"  {k:12s}: {v:8d} {human_perc(v, total)} |{traffic_str}")
-	# fragmentation
+	
+	# Fragmentation
 	frag_cnt = tp.get('fragmented_packets', 0)
 	frag_perc = human_perc(frag_cnt, tp['total_packets'])
 	if frag_cnt != 0:
 		print(f"  Fragmented  : {frag_cnt:8d} {frag_perc}")
-	
+
+	# TCP Out-of-Order
+	ooo_cnt = tp.get('tcp_out_of_order_packets', 0)
+	ooo_per = human_perc(ooo_cnt, tp['total_packets'])
+	if ooo_cnt != 0:
+		print(f"  TCP-Out-of..: {ooo_cnt:8d} {ooo_per}")
+
 	print("-" * 60)
 	print("L4 protocol distribution:")
 	total = sum(tp['l4_counts'].values())
